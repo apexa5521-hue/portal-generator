@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#f5f7fa">
+<title>أبكس كير</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="portal.css">
+</head>
+<body>
+<div id="app" class="portal"></div>
+<script src="config.js"></script>
+<script src="portal.js"></script>
+<script src="api.js"></script>
+<script>
+(function () {
+  var root = document.getElementById('app');
+  var params = new URLSearchParams(location.search);
+
+  /* معاينة داخل لوحة الأدمن: تصل البيانات برسالة من الصفحة الأم */
+  if (params.get('preview') === '1') {
+    window.addEventListener('message', function (e) {
+      if (e.origin !== location.origin || !e.data || e.data.type !== 'portal-preview') return;
+      Portal.render(root, e.data.data, { preview: true });
+    });
+    if (window.parent !== window) window.parent.postMessage({ type: 'portal-preview-ready' }, location.origin);
+    return;
+  }
+
+  var slug = (params.get('p') || '').toLowerCase();
+  if (!slug) {
+    Portal.renderNotice(root, 'الرابط غير مكتمل', 'استخدم الرابط الذي وصلك من إدارة الجودة والتحول الرقمي.');
+    return;
+  }
+
+  Portal.renderLoading(root);
+  Api.getPublic(slug).then(function (res) {
+    if (res && res.ok) {
+      Portal.render(root, res);
+    } else if (res && res.error === 'not_found') {
+      Portal.renderNotice(root, 'الصفحة غير موجودة', 'تأكد من الرابط، أو تواصل مع إدارة الجودة والتحول الرقمي.');
+    } else {
+      Portal.renderNotice(root, 'تعذر تحميل الصفحة', 'تحقق من اتصال الإنترنت ثم أعد المحاولة.');
+    }
+  });
+})();
+</script>
+</body>
+</html>

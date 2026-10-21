@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>لوحة الإدارة · مولّد الصفحات</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="admin.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form class="login__box" id="loginForm" autocomplete="off">
+    <h1>لوحة الإدارة</h1>
+    <p>أدخل رمز الدخول للمتابعة.</p>
+    <input id="pin" type="password" inputmode="numeric" placeholder="رمز الدخول" autocomplete="off" required>
+    <button class="btn btn--primary" type="submit">دخول</button>
+    <div class="login__err" id="loginErr" role="alert"></div>
+  </form>
+</div>
+
+<div id="shell" class="shell" hidden>
+  <aside class="side">
+    <div class="side__head">
+      <strong>مولّد الصفحات</strong>
+      <button class="btn btn--ghost btn--sm" id="logout" type="button">خروج</button>
+    </div>
+    <button class="btn btn--primary btn--block" id="newPage" type="button">+ صفحة جديدة</button>
+    <nav class="side__list" id="pageList" aria-label="الصفحات"></nav>
+  </aside>
+
+  <main class="main">
+    <div class="banner" id="localBanner" hidden>الوضع التجريبي: البيانات تُحفظ في هذا المتصفح فقط. ضع رابط Apps Script في config.js لحفظها في Google Sheets.</div>
+    <div class="empty-main" id="emptyMain">اختر صفحة من القائمة أو أنشئ صفحة جديدة.</div>
+
+    <div class="editor" id="editor" hidden>
+      <section class="panel">
+        <h2>بيانات الصفحة</h2>
+        <div class="field">
+          <label for="fTitle">عنوان الصفحة</label>
+          <input id="fTitle" maxlength="80" placeholder="أنظمة الموارد البشرية">
+        </div>
+        <div class="field">
+          <label for="fBen">الجهة المستفيدة (تظهر كوسم)</label>
+          <input id="fBen" maxlength="60" placeholder="للموارد البشرية">
+        </div>
+        <div class="field">
+          <label for="fDesc">وصف قصير</label>
+          <textarea id="fDesc" maxlength="240" rows="2" placeholder="اختر النظام الذي تحتاجه…"></textarea>
+        </div>
+        <div class="field">
+          <label for="fSlug">الرابط المختصر</label>
+          <input id="fSlug" dir="ltr" maxlength="40" placeholder="hr" spellcheck="false">
+          <small id="slugHint">أحرف إنجليزية صغيرة وأرقام وشرطة. لا يمكن تغييره بعد الحفظ.</small>
+        </div>
+        <div class="field">
+          <label>لون الصفحة</label>
+          <div class="swatches" id="swatches"></div>
+          <div class="custom-color">
+            <input type="color" id="fColor" aria-label="لون مخصص">
+            <small>لون مخصص — يُغمَّق تلقائيًا إذا كان فاتحًا ليبقى النص مقروءًا.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel__head">
+          <h2>البطاقات</h2>
+          <div class="stepper" role="group" aria-label="عدد البطاقات">
+            <button type="button" id="cntMinus" aria-label="إنقاص">−</button>
+            <output id="cntOut">0</output>
+            <button type="button" id="cntPlus" aria-label="زيادة">+</button>
+          </div>
+        </div>
+        <div id="cardsEditor" class="acc"></div>
+      </section>
+
+      <section class="panel">
+        <h2>الرابط الموحد</h2>
+        <div class="share" id="shareBox">
+          <div class="share__row">
+            <input id="shareUrl" dir="ltr" readonly aria-label="الرابط الموحد">
+            <button class="btn btn--primary" id="copyBtn" type="button">نسخ</button>
+            <a class="btn" id="openBtn" target="_blank" rel="noopener">فتح</a>
+          </div>
+          <div class="share__qr" id="qr"></div>
+          <small id="shareNote">يظهر الرابط بعد حفظ الصفحة.</small>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button class="btn btn--primary" id="saveBtn" type="button">حفظ الصفحة</button>
+        <button class="btn" id="dupBtn" type="button">نسخ الصفحة</button>
+        <button class="btn btn--danger" id="delBtn" type="button">حذف</button>
+        <span class="dirty" id="dirty" hidden>تغييرات غير محفوظة</span>
+      </div>
+    </div>
+  </main>
+
+  <aside class="preview" id="previewCol" hidden>
+    <div class="preview__bar">
+      <strong>معاينة مباشرة</strong>
+      <div class="seg" role="group" aria-label="حجم المعاينة">
+        <button type="button" data-mode="desktop" class="on">حاسوب</button>
+        <button type="button" data-mode="mobile">جوال</button>
+      </div>
+    </div>
+    <div class="preview__stage" id="stage">
+      <div class="preview__frame" id="frameWrap">
+        <iframe id="frame" title="معاينة الصفحة" src="index.html?preview=1"></iframe>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="portal.js"></script>
+<script src="api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
