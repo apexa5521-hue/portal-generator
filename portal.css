@@ -77,6 +77,7 @@ body {
 .brand__sub { font-size: 13px; color: var(--muted); letter-spacing: 0.04em; }
 
 .count-chip {
+  margin-inline-start: auto;
   display: flex;
   align-items: center;
   gap: 8px;

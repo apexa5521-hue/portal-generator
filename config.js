@@ -2,7 +2,7 @@
    وإذا تُرك فارغًا يعمل النظام بوضع تجريبي يحفظ في المتصفح فقط. */
 window.PORTAL_CONFIG = {
   API_URL: '',
-  ORG_NAME: 'أبكس كير',
-  ORG_SUB: 'Apex Care Clinics',
-  FOOTER: 'إدارة الجودة والتحول الرقمي · أبكس كير'
+  ORG_NAME: '',
+  ORG_SUB: '',
+  FOOTER: 'إدارة الجودة والتحول الرقمي'
 };

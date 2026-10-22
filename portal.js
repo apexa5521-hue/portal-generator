@@ -96,6 +96,14 @@
 
   function cfg() { return global.PORTAL_CONFIG || {}; }
 
+  /* اسم المنشأة اختياري: يُحذف من الرأس كليًا عند تركه فارغًا في config.js */
+  function brandHtml(withSub) {
+    var c = cfg();
+    if (!c.ORG_NAME && !(withSub && c.ORG_SUB)) return '';
+    return '<div class="brand">' + (c.ORG_NAME ? '<span class="brand__name">' + esc(c.ORG_NAME) + '</span>' : '') +
+      (withSub && c.ORG_SUB ? '<span class="brand__sub">' + esc(c.ORG_SUB) + '</span>' : '') + '</div>';
+  }
+
   function cardHtml(c, i) {
     var logo = safeLogo(c.logo);
     var icon = logo
@@ -156,12 +164,11 @@
     var c = cfg();
     var title = page.title || '';
     if (!opts.preview && global.document) {
-      global.document.title = title ? title + ' · ' + (c.ORG_NAME || '') : (c.ORG_NAME || '');
+      global.document.title = [title, c.ORG_NAME].filter(Boolean).join(' · ') || 'بوابة الأنظمة';
     }
 
     var html = '<div class="portal__glow"></div><div class="portal__dots"></div><div class="portal__inner">' +
-      '<header class="portal__header"><div class="brand"><span class="brand__name">' + esc(c.ORG_NAME || '') + '</span>' +
-      '<span class="brand__sub">' + esc(c.ORG_SUB || '') + '</span></div>' +
+      '<header class="portal__header">' + brandHtml(true) +
       '<div class="count-chip"><span class="count-chip__dot"></span><span>' + esc(countLabel(cards.length)) + '</span></div></header>' +
       '<section class="hero">' +
       (page.beneficiary ? '<div class="hero__tag">' + esc(page.beneficiary) + '</div>' : '') +
@@ -185,16 +192,16 @@
   }
 
   function renderNotice(root, title, text) {
-    var c = cfg();
+    var brand = brandHtml(true);
     root.style.removeProperty('--accent');
-    root.innerHTML = '<div class="portal__inner"><header class="portal__header"><div class="brand"><span class="brand__name">' + esc(c.ORG_NAME || '') +
-      '</span><span class="brand__sub">' + esc(c.ORG_SUB || '') + '</span></div></header>' +
+    root.innerHTML = '<div class="portal__inner">' + (brand ? '<header class="portal__header">' + brand + '</header>' : '') +
       '<div class="notice"><h2>' + esc(title) + '</h2><p>' + esc(text) + '</p></div></div>';
   }
 
   function renderLoading(root) {
-    root.innerHTML = '<div class="portal__inner"><header class="portal__header"><div class="brand"><span class="brand__name">' +
-      esc(cfg().ORG_NAME || '') + '</span></div></header><section class="grid" aria-busy="true">' +
+    var brand = brandHtml(false);
+    root.innerHTML = '<div class="portal__inner">' + (brand ? '<header class="portal__header">' + brand + '</header>' : '') +
+      '<section class="grid" aria-busy="true" style="margin-top:28px">' +
       '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></section></div>';
   }
 
