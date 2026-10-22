@@ -4,6 +4,8 @@
   --accent-dark: #0a524c;
   --accent-soft: rgba(15, 118, 110, 0.1);
   --accent-glow: rgba(15, 118, 110, 0.14);
+  --accent-bright: #64a8a2;
+  --dot: rgba(15, 118, 110, 0.2);
   --on-fill-desc: #d8ecea;
   --ink: #14202b;
   --muted: #526070;
@@ -45,6 +47,17 @@ body {
   background: radial-gradient(circle, var(--accent-glow), transparent 65%);
 }
 
+.portal__dots {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 640px;
+  pointer-events: none;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 70% at 85% 0%, #000 20%, transparent 72%);
+  mask-image: radial-gradient(ellipse 75% 70% at 85% 0%, #000 20%, transparent 72%);
+}
+
 .portal__inner {
   position: relative;
   width: 100%;
@@ -64,6 +77,7 @@ body {
 .brand__sub { font-size: 13px; color: var(--muted); letter-spacing: 0.04em; }
 
 .count-chip {
+  margin-inline-start: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -75,7 +89,16 @@ body {
   border: 1px solid var(--line);
   white-space: nowrap;
 }
-.count-chip__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.count-chip__dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.count-chip__dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
 
 .hero {
   display: flex;
@@ -125,6 +148,8 @@ body {
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
   transition: box-shadow 0.3s ease, border-color 0.3s ease;
+  --glow-color: var(--accent);
+  --spot-color: var(--accent-soft);
 }
 .card__fill {
   position: absolute;
@@ -132,6 +157,30 @@ body {
   background: linear-gradient(135deg, var(--accent), var(--accent-dark));
   transform: translateY(101%);
   transition: transform 0.3s ease;
+}
+/* بقعة ضوء تتبع المؤشر (Spotlight) وحدّ متوهج باتجاهه (Glowing Effect)، والإحداثيات من portal.js */
+.card__spot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--glow-on, 0);
+  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%), var(--spot-color), transparent 70%);
+  transition: opacity 0.35s ease;
+}
+.card__glow {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: var(--glow-on, 0);
+  background: conic-gradient(from calc(var(--glow-angle, 0deg) - 60deg),
+    transparent 0deg, var(--accent-bright) 30deg, var(--glow-color) 60deg, var(--accent-bright) 90deg, transparent 120deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  transition: opacity 0.35s ease;
 }
 .card__big {
   position: absolute;
@@ -215,6 +264,8 @@ body {
 .card:active .card__purpose { color: var(--on-fill-desc); }
 .card:focus-visible .card__arrow,
 .card:active .card__arrow { background: rgba(255, 255, 255, 0.22); }
+.card:focus-visible,
+.card:active { --glow-color: #fff; --spot-color: rgba(255, 255, 255, 0.16); }
 
 @media (hover: hover) {
   .card:hover {
@@ -228,6 +279,19 @@ body {
   .card:hover .card__go { color: #fff; }
   .card:hover .card__purpose { color: var(--on-fill-desc); }
   .card:hover .card__arrow { background: rgba(255, 255, 255, 0.22); }
+  .card:hover { --glow-color: #fff; --spot-color: rgba(255, 255, 255, 0.16); }
+}
+
+/* دخول متتابع عند فتح الصفحة (Blur Fade). لا يعمل في معاينة الأدمن حتى لا يتكرر مع كل حرف. */
+.portal--enter .hero > *,
+.portal--enter .card {
+  animation: blur-in 0.65s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.portal--enter .hero > :nth-child(2) { animation-delay: 70ms; }
+.portal--enter .hero > :nth-child(3) { animation-delay: 140ms; }
+.portal--enter .card { animation-delay: calc(200ms + var(--i, 0) * 70ms); }
+@keyframes blur-in {
+  from { opacity: 0; filter: blur(8px); transform: translateY(12px); }
 }
 
 .empty, .notice {
@@ -266,7 +330,7 @@ body {
   .hero__desc { font-size: 15px; }
   .grid { gap: 12px; }
   .card { border-radius: 16px; }
-  .card__big { top: -34px; left: -34px; width: 130px; height: 130px; }
+  .card__big { display: none; }
   .card__body { flex-direction: row; align-items: center; gap: 14px; min-height: 0; padding: 18px 16px; }
   .card__icon { flex: 0 0 auto; }
   .card__name { font-size: 17px; }
@@ -277,6 +341,6 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card, .card__fill, .card__big, .card__icon, .card__name, .card__purpose, .card__go, .card__arrow { transition: none; }
-  .skeleton { animation: none; }
+  .card, .card__fill, .card__big, .card__icon, .card__name, .card__purpose, .card__go, .card__arrow, .card__spot, .card__glow { transition: none; }
+  .skeleton, .count-chip__dot::after, .portal--enter .hero > *, .portal--enter .card { animation: none; }
 }
