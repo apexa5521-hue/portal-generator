@@ -78,6 +78,7 @@
   /* ───── نصوص ───── */
   function countLabel(n) {
     var f = new Intl.NumberFormat('ar-SA').format(n);
+    if (!n) return 'لا توجد أنظمة بعد';
     if (n === 1) return 'نظام واحد متاح';
     if (n === 2) return 'نظامان متاحان';
     if (n >= 3 && n <= 10) return f + ' أنظمة متاحة';
