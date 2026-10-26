@@ -38,6 +38,9 @@
 
   var ARROW = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 17V7h10"/><path d="M17 17 7 7"/></svg>';
 
+  var SHEET = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>';
+  var EXTERNAL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+
   /* ───── الألوان ───── */
   function hexToRgb(h) {
     var m = /^#?([0-9a-f]{6})$/i.exec(h || '');
@@ -111,13 +114,25 @@
       ? '<span class="card__icon card__icon--logo"><img src="' + logo + '" alt=""></span>'
       : '<span class="card__icon">' + svg(c.icon, 32, 1.8) + '</span>';
     var big = logo ? '' : '<span class="card__big" aria-hidden="true">' + svg(c.icon, 200, 1.1) + '</span>';
-    return '<a class="card" href="' + esc(safeUrl(c.url)) + '" rel="noopener" style="--i:' + (i || 0) + '">' +
-      '<span class="card__fill" aria-hidden="true"></span><span class="card__spot" aria-hidden="true"></span>' + big +
-      '<span class="card__body">' + icon +
-      '<span class="card__text"><span class="card__name">' + esc(c.name) + '</span>' +
-      '<span class="card__purpose">' + esc(c.purpose) + '</span></span>' +
-      '<span class="card__go"><span>الدخول إلى النظام</span><span class="card__arrow">' + ARROW + '</span></span>' +
-      '</span><span class="card__glow" aria-hidden="true"></span></a>';
+    var href = esc(safeUrl(c.url));
+    var links = (c.links || []).filter(function (l) { return l && l.label; });
+    var deco = '<span class="card__fill" aria-hidden="true"></span><span class="card__spot" aria-hidden="true"></span>' + big;
+    var purpose = '<span class="card__purpose">' + esc(c.purpose) + '</span>';
+    var go = '<span class="card__go"><span>الدخول إلى النظام</span><span class="card__arrow">' + ARROW + '</span></span>';
+    var glow = '<span class="card__glow" aria-hidden="true"></span>';
+    if (!links.length) {
+      return '<a class="card" href="' + href + '" rel="noopener" style="--i:' + (i || 0) + '">' + deco +
+        '<span class="card__body">' + icon + '<span class="card__text"><span class="card__name">' + esc(c.name) + '</span>' + purpose + '</span>' +
+        go + '</span>' + glow + '</a>';
+    }
+    /* بطاقة فيها روابط إضافية: لا يجوز رابط داخل رابط، فيصير اسم المنصة هو الرابط الرئيسي ويمتد ليغطي البطاقة،
+       وتعلوه روابط الشيت وتفتح في تبويب جديد. */
+    var list = '<ul class="card__links" aria-label="روابط ' + esc(c.name) + '">' + links.map(function (l) {
+      return '<li><a href="' + esc(safeUrl(l.url)) + '" target="_blank" rel="noopener">' + SHEET + '<span>' + esc(l.label) + '</span>' + EXTERNAL + '</a></li>';
+    }).join('') + '</ul>';
+    return '<div class="card card--links" style="--i:' + (i || 0) + '">' + deco +
+      '<div class="card__body">' + icon + '<div class="card__text"><a class="card__name card__main" href="' + href + '" rel="noopener">' + esc(c.name) + '</a>' +
+      purpose + list + '</div>' + go + '</div>' + glow + '</div>';
   }
 
   /* يتتبع المؤشر مرة واحدة على مستوى الصفحة ويحدّث البطاقات القريبة منه فقط (أجهزة الماوس فقط). */
@@ -185,7 +200,7 @@
     bindGlow();
 
     if (opts.preview) {
-      var links = root.querySelectorAll('a.card');
+      var links = root.querySelectorAll('a.card, .card a');
       for (var i = 0; i < links.length; i++) {
         links[i].addEventListener('click', function (e) { e.preventDefault(); });
       }

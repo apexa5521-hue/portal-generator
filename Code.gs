@@ -11,8 +11,9 @@
 var SHEET_PAGES = 'Pages';
 var SHEET_CARDS = 'Cards';
 var PAGE_COLS = ['slug', 'title', 'beneficiary', 'description', 'color', 'status', 'createdAt', 'updatedAt'];
-var CARD_COLS = ['slug', 'order', 'name', 'purpose', 'url', 'icon', 'logo'];
+var CARD_COLS = ['slug', 'order', 'name', 'purpose', 'url', 'icon', 'logo', 'links'];
 var MAX_CARDS = 12;
+var MAX_LINKS = 6;
 var MAX_LOGO_CHARS = 40000;
 var ICONS = [
   'check', 'sign', 'smile', 'cap', 'users', 'shield', 'file', 'calendar', 'chart',
@@ -54,8 +55,15 @@ function ensureSheet_(ss, name, cols) {
   if (sh.getLastRow() === 0) {
     sh.getRange(1, 1, 1, cols.length).setValues([cols]);
     sh.setFrozenRows(1);
+  } else {
+    ensureHeader_(sh, cols);
   }
   return sh;
+}
+
+/* يضيف عناوين الأعمدة الجديدة (مثل links) إلى جدول أُنشئ بإصدار سابق */
+function ensureHeader_(sh, cols) {
+  if (sh.getLastColumn() < cols.length) sh.getRange(1, 1, 1, cols.length).setValues([cols]);
 }
 
 /* ───────────────────────── نقاط الدخول ───────────────────────── */
@@ -156,7 +164,19 @@ function cardOut_(c, withLogo) {
     icon: String(c.icon || 'link')
   };
   if (c.logo) o.logo = String(c.logo);
+  var links = parseLinks_(c.links);
+  if (links.length) o.links = links;
   return o;
+}
+
+function parseLinks_(v) {
+  if (!v) return [];
+  try {
+    var a = JSON.parse(String(v));
+    return Array.isArray(a) ? a.map(function (l) { return { label: String(l.label || ''), url: String(l.url || '') }; }) : [];
+  } catch (err) {
+    return [];
+  }
 }
 
 function cardsFor_(slug) {
@@ -240,8 +260,20 @@ function validateSave_(page, cards) {
     if (c.logo && (!/^data:image\/(png|webp|jpeg|svg\+xml);base64,[A-Za-z0-9+\/=]+$/.test(String(c.logo)) || String(c.logo).length > MAX_LOGO_CHARS)) {
       return 'invalid:card' + i + ':logo';
     }
+    if (c.links != null && !validLinks_(c.links)) return 'invalid:card' + i + ':links';
   }
   return null;
+}
+
+/* روابط إضافية اختيارية داخل البطاقة (مثل صفحات Google Sheets)، لكل رابط اسم يوضح الغرض منه */
+function validLinks_(links) {
+  if (!Array.isArray(links) || links.length > MAX_LINKS) return false;
+  for (var j = 0; j < links.length; j++) {
+    var l = links[j] || {};
+    if (!String(l.label || '').trim() || String(l.label).length > 40) return false;
+    if (!/^https?:\/\/\S+$/i.test(String(l.url || '')) || String(l.url).length > 600) return false;
+  }
+  return true;
 }
 
 function savePage_(body) {
@@ -275,9 +307,12 @@ function savePage_(body) {
   }
 
   var shC = ss.getSheetByName(SHEET_CARDS);
+  ensureHeader_(shC, CARD_COLS);
   deleteCardRows_(shC, page.slug);
   var rows = cards.map(function (c, i) {
-    return [page.slug, i + 1, String(c.name).trim(), String(c.purpose || '').trim(), String(c.url).trim(), String(c.icon || 'link'), c.logo ? String(c.logo) : ''];
+    var links = (c.links || []).map(function (l) { return { label: String(l.label).trim(), url: String(l.url).trim() }; });
+    return [page.slug, i + 1, String(c.name).trim(), String(c.purpose || '').trim(), String(c.url).trim(), String(c.icon || 'link'),
+      c.logo ? String(c.logo) : '', links.length ? JSON.stringify(links) : ''];
   });
   shC.getRange(shC.getLastRow() + 1, 1, rows.length, CARD_COLS.length).setValues(rows);
 

@@ -244,6 +244,40 @@ body {
 
 .card:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
 
+/* بطاقة بروابط إضافية: اسم المنصة رابط يمتد على البطاقة كلها، وروابط الشيت فوقه */
+.card__main { color: inherit; text-decoration: none; outline: none; }
+.card__main::after { content: ''; position: absolute; inset: 0; z-index: 1; }
+.card--links:has(.card__main:focus-visible) { outline: 3px solid var(--ink); outline-offset: 3px; }
+.card__links {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.card__links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.3s ease;
+}
+.card__links a svg { flex: 0 0 auto; color: var(--accent); transition: color 0.3s ease; }
+.card__links a svg:last-child { width: 13px; height: 13px; opacity: 0.55; }
+.card__links a:hover { border-color: var(--accent); }
+.card__links a:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
 /* حالة اللون: تمرير بالماوس أو تركيز لوحة المفاتيح أو لمس الشاشة */
 .card:focus-visible,
 .card:active {
@@ -267,6 +301,20 @@ body {
 .card:focus-visible,
 .card:active { --glow-color: #fff; --spot-color: rgba(255, 255, 255, 0.16); }
 
+/* بطاقة الروابط تتلون أيضًا عند تركيز أي رابط فيها بلوحة المفاتيح */
+.card--links:focus-within { border-color: var(--accent); box-shadow: 0 22px 40px -22px var(--accent); --glow-color: #fff; --spot-color: rgba(255, 255, 255, 0.16); }
+.card--links:focus-within .card__fill { transform: translateY(0); }
+.card--links:focus-within .card__big { transform: rotate(12deg); color: rgba(255, 255, 255, 0.2); }
+.card--links:focus-within .card__icon,
+.card--links:focus-within .card__name,
+.card--links:focus-within .card__go { color: #fff; }
+.card--links:focus-within .card__purpose { color: var(--on-fill-desc); }
+.card--links:focus-within .card__arrow { background: rgba(255, 255, 255, 0.22); }
+.card--links:focus-within .card__links a,
+.card--links:active .card__links a { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.28); color: #fff; }
+.card--links:focus-within .card__links a svg,
+.card--links:active .card__links a svg { color: #fff; }
+
 @media (hover: hover) {
   .card:hover {
     border-color: var(--accent);
@@ -280,6 +328,9 @@ body {
   .card:hover .card__purpose { color: var(--on-fill-desc); }
   .card:hover .card__arrow { background: rgba(255, 255, 255, 0.22); }
   .card:hover { --glow-color: #fff; --spot-color: rgba(255, 255, 255, 0.16); }
+  .card--links:hover .card__links a { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.28); color: #fff; }
+  .card--links:hover .card__links a svg { color: #fff; }
+  .card--links .card__links a:hover { background: rgba(255, 255, 255, 0.26); border-color: rgba(255, 255, 255, 0.6); }
 }
 
 /* دخول متتابع عند فتح الصفحة (Blur Fade). لا يعمل في معاينة الأدمن حتى لا يتكرر مع كل حرف. */
@@ -336,11 +387,15 @@ body {
   .card__name { font-size: 17px; }
   .card__purpose { font-size: 13.5px; line-height: 1.6; }
   .card__go span:first-child { display: none; }
+  .card--links .card__body { align-items: flex-start; }
+  .card--links .card__arrow { margin-top: 2px; }
+  .card__links { gap: 6px; }
+  .card__links a { font-size: 13px; padding: 6px 10px; }
   .card__arrow { width: 34px; height: 34px; flex: 0 0 auto; }
   .skeleton { min-height: 96px; border-radius: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card, .card__fill, .card__big, .card__icon, .card__name, .card__purpose, .card__go, .card__arrow, .card__spot, .card__glow { transition: none; }
+  .card, .card__fill, .card__big, .card__icon, .card__name, .card__purpose, .card__go, .card__arrow, .card__spot, .card__glow, .card__links a, .card__links a svg { transition: none; }
   .skeleton, .count-chip__dot::after, .portal--enter .hero > *, .portal--enter .card { animation: none; }
 }

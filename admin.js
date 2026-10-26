@@ -24,7 +24,7 @@
   }
   function getPin() { try { return sessionStorage.getItem(PIN_KEY) || ''; } catch (e) { return ''; } }
   function setPin(v) { try { if (v) sessionStorage.setItem(PIN_KEY, v); else sessionStorage.removeItem(PIN_KEY); } catch (e) {} }
-  function blankCard() { return { name: '', purpose: '', url: '', icon: 'link', logo: '' }; }
+  function blankCard() { return { name: '', purpose: '', url: '', icon: 'link', logo: '', links: [] }; }
   function shareUrl(slug) {
     var base = location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/, '');
     return base + '?p=' + slug;
@@ -162,6 +162,7 @@
         '<div class="field"><label>اسم المنصة</label><input data-f="name" maxlength="60" value="' + esc(c.name) + '"></div>' +
         '<div class="field"><label>الهدف منها</label><input data-f="purpose" maxlength="160" value="' + esc(c.purpose) + '"></div>' +
         '<div class="field"><label>رابط صفحة الدخول</label><input data-f="url" dir="ltr" placeholder="https://" value="' + esc(c.url) + '"></div>' +
+        linksField(c) +
         '<div class="field"><label>الأيقونة</label><div class="icons">' + icons + '</div></div>' +
         '<div class="field"><label>شعار المنصة (اختياري، يحل محل الأيقونة)</label>' +
         '<input type="file" data-act="logo" accept="image/png,image/jpeg,image/webp">' +
@@ -172,7 +173,30 @@
     }).join('');
   }
 
+  /* روابط إضافية اختيارية داخل البطاقة، مثل صفحات Google Sheets، ولكل رابط اسم يوضح الغرض منه */
+  function linksField(c) {
+    var links = c.links || (c.links = []);
+    var max = Api.MAX_LINKS;
+    var rows = links.map(function (l, j) {
+      return '<div class="link-row" data-j="' + j + '">' +
+        '<input data-lf="label" maxlength="40" placeholder="اسم الرابط، مثل: سجل التراخيص" aria-label="اسم الرابط ' + (j + 1) + '" value="' + esc(l.label) + '">' +
+        '<input data-lf="url" dir="ltr" placeholder="https://docs.google.com/spreadsheets/…" aria-label="رابط ' + (j + 1) + '" value="' + esc(l.url) + '">' +
+        '<button type="button" class="btn btn--sm btn--danger" data-act="rmlink" aria-label="حذف الرابط ' + (j + 1) + '">حذف</button></div>';
+    }).join('');
+    return '<div class="field"><label>روابط إضافية (اختياري، حتى ' + max + ')</label>' +
+      '<p class="hint">تظهر داخل البطاقة تحت الهدف، وتفتح في تبويب جديد. مناسبة لصفحات Google Sheets.</p>' +
+      rows +
+      (links.length < max ? '<button type="button" class="btn btn--sm" data-act="addlink">+ إضافة رابط</button>' : '') + '</div>';
+  }
+
   $('cardsEditor').addEventListener('input', function (e) {
+    var lf = e.target.getAttribute('data-lf');
+    if (lf) {
+      var ci = +e.target.closest('.item').getAttribute('data-i');
+      var j = +e.target.closest('.link-row').getAttribute('data-j');
+      cur.cards[ci].links[j][lf] = e.target.value;
+      changed(); return;
+    }
     var f = e.target.getAttribute('data-f'); if (!f) return;
     var i = +e.target.closest('.item').getAttribute('data-i');
     cur.cards[i][f] = e.target.value;
@@ -195,6 +219,14 @@
     if (act === 'toggle') { openIdx = openIdx === i ? -1 : i; renderCards(); return; }
     if (act === 'icon') { cur.cards[i].icon = b.getAttribute('data-k'); renderCards(); changed(); }
     else if (act === 'rmlogo') { cur.cards[i].logo = ''; renderCards(); changed(); }
+    else if (act === 'addlink') {
+      var ls = cur.cards[i].links || (cur.cards[i].links = []);
+      if (ls.length >= Api.MAX_LINKS) return;
+      ls.push({ label: '', url: '' }); renderCards(); changed();
+      var rows = $('cardsEditor').querySelectorAll('.item[data-i="' + i + '"] .link-row input[data-lf="label"]');
+      if (rows.length) rows[rows.length - 1].focus();
+    }
+    else if (act === 'rmlink') { cur.cards[i].links.splice(+b.closest('.link-row').getAttribute('data-j'), 1); renderCards(); changed(); }
     else if (act === 'up' && i > 0) { swap(i, i - 1); }
     else if (act === 'down' && i < cur.cards.length - 1) { swap(i, i + 1); }
     else if (act === 'remove') {
@@ -264,7 +296,9 @@
     var data = {
       page: { title: cur.page.title || 'عنوان الصفحة', beneficiary: cur.page.beneficiary, description: cur.page.description, color: cur.page.color },
       cards: cur.cards.map(function (c) {
-        return { name: c.name || 'اسم المنصة', purpose: c.purpose, url: '#', icon: c.icon, logo: c.logo };
+        var links = (c.links || []).filter(function (l) { return l.label && l.label.trim(); })
+          .map(function (l) { return { label: l.label, url: '#' }; });
+        return { name: c.name || 'اسم المنصة', purpose: c.purpose, url: '#', icon: c.icon, logo: c.logo, links: links };
       })
     };
     w.postMessage({ type: 'portal-preview', data: data }, location.origin);
@@ -272,6 +306,13 @@
   window.addEventListener('message', function (e) {
     if (e.origin === location.origin && e.data && e.data.type === 'portal-preview-ready') { frameReady = true; sendPreview(); }
   });
+  /* قد يجهز الإطار قبل تحميل هذا الملف (مكتبة QR تؤخره) فتضيع رسالة الجاهزية، لذا نتحقق من حالته مباشرة أيضًا */
+  (function () {
+    var fr = $('frame');
+    function ready() { frameReady = true; sendPreview(); }
+    fr.addEventListener('load', ready);
+    try { if (fr.contentDocument && fr.contentDocument.readyState === 'complete' && fr.contentWindow.Portal) ready(); } catch (e) {}
+  })();
   function fitPreview() {
     var stage = $('stage'); var wrap = $('frameWrap');
     var W = previewMode === 'mobile' ? 390 : 1200, H = previewMode === 'mobile' ? 760 : 820;
@@ -293,7 +334,11 @@
   function clean() {
     return {
       page: { slug: cur.page.slug.trim(), title: cur.page.title.trim(), beneficiary: (cur.page.beneficiary || '').trim(), description: (cur.page.description || '').trim(), color: cur.page.color },
-      cards: cur.cards.map(function (c) { return { name: c.name.trim(), purpose: (c.purpose || '').trim(), url: c.url.trim(), icon: c.icon || 'link', logo: c.logo || '' }; })
+      cards: cur.cards.map(function (c) {
+        var links = (c.links || []).map(function (l) { return { label: (l.label || '').trim(), url: (l.url || '').trim() }; })
+          .filter(function (l) { return l.label || l.url; });
+        return { name: c.name.trim(), purpose: (c.purpose || '').trim(), url: c.url.trim(), icon: c.icon || 'link', logo: c.logo || '', links: links };
+      })
     };
   }
   $('saveBtn').addEventListener('click', function () {
