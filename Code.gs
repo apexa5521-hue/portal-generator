@@ -10,10 +10,13 @@
 
 var SHEET_PAGES = 'Pages';
 var SHEET_CARDS = 'Cards';
+var SHEET_LOG = 'Log';
 var PAGE_COLS = ['slug', 'title', 'beneficiary', 'description', 'color', 'status', 'createdAt', 'updatedAt'];
 var CARD_COLS = ['slug', 'order', 'name', 'purpose', 'url', 'icon', 'logo', 'links'];
 var MAX_CARDS = 12;
 var MAX_LINKS = 6;
+var LOG_COLS = ['time', 'slug', 'by', 'action', 'summary', 'snapshot'];
+var MAX_SNAPSHOT_CHARS = 49000;
 var MAX_LOGO_CHARS = 40000;
 var ICONS = [
   'check', 'sign', 'smile', 'cap', 'users', 'shield', 'file', 'calendar', 'chart',
@@ -29,7 +32,13 @@ function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ensureSheet_(ss, SHEET_PAGES, PAGE_COLS);
   ensureSheet_(ss, SHEET_CARDS, CARD_COLS);
+  ensureSheet_(ss, SHEET_LOG, LOG_COLS);
   var props = PropertiesService.getScriptProperties();
+  var email = Session.getEffectiveUser().getEmail();
+  if (email) {
+    props.setProperty('ADMIN_EMAIL', email);
+    Logger.log('إشعارات تعديلات أصحاب الصفحات تصل إلى: ' + email);
+  }
   if (!props.getProperty('ADMIN_PIN')) {
     var pin = String(Math.floor(100000 + Math.random() * 900000));
     props.setProperty('ADMIN_PIN', pin);
@@ -87,6 +96,7 @@ function doPost(e) {
   } catch (err) {
     return json_({ ok: false, error: 'bad_request' });
   }
+  if (body && body.role === 'owner') return json_(ownerCall_(body));
   var guard = checkPin_(body && body.pin);
   if (!guard.ok) return json_(guard);
 
@@ -101,9 +111,12 @@ function doPost(e) {
       case 'auth': return json_({ ok: true });
       case 'list': return json_(listPages_());
       case 'get': return json_(getPageFull_(String(body.slug || '')));
-      case 'save': return json_(savePage_(body));
-      case 'delete': return json_(deletePage_(String(body.slug || '')));
-      case 'duplicate': return json_(duplicatePage_(String(body.slug || ''), String(body.newSlug || '')));
+      case 'save': return json_(adminSave_(body));
+      case 'delete': return json_(adminDelete_(String(body.slug || '')));
+      case 'duplicate': return json_(adminDuplicate_(String(body.slug || ''), String(body.newSlug || '')));
+      case 'ownerPin': return json_(ownerPin_(String(body.slug || ''), String(body.op || '')));
+      case 'log': return json_(listLog_(String(body.slug || ''), Number(body.limit) || 100));
+      case 'logEntry': return json_(getLogEntry_(Number(body.id)));
       default: return json_({ ok: false, error: 'bad_action' });
     }
   } catch (err) {
@@ -223,9 +236,11 @@ function listPages_() {
     var k = String(c.slug);
     counts[k] = (counts[k] || 0) + 1;
   });
+  var props = PropertiesService.getScriptProperties();
   var pages = readTable_(SHEET_PAGES, PAGE_COLS).map(function (r) {
     var p = pageOut_(r);
     p.cardCount = counts[p.slug] || 0;
+    p.hasOwner = !!props.getProperty('owner:' + p.slug);
     return p;
   });
   return { ok: true, pages: pages };
@@ -348,6 +363,7 @@ function deletePage_(slug) {
   shP.deleteRow(rowNum);
   deleteCardRows_(ss.getSheetByName(SHEET_CARDS), slug);
   CacheService.getScriptCache().remove('page:' + slug);
+  PropertiesService.getScriptProperties().deleteProperty('owner:' + slug);
   return { ok: true };
 }
 
@@ -360,4 +376,205 @@ function duplicatePage_(slug, newSlug) {
   page.slug = newSlug;
   page.title = (page.title + ' (نسخة)').slice(0, 80);
   return savePage_({ isNew: true, page: page, cards: src.cards });
+}
+
+
+/* ───────────────────────── صاحب الصفحة ─────────────────────────
+ * لكل صفحة رمز تعديل اختياري تصدره الإدارة. صاحب الصفحة يدخل من admin.html?edit=slug
+ * ويعدّل صفحته فقط (لا يغيّر الرابط المختصر ولا يحذف الصفحة). كل حفظ يُسجَّل في Log ويصل للإدارة بالبريد.
+ */
+
+function ownerCall_(body) {
+  var slug = String(body.slug || '');
+  if (!validSlug_(slug)) return { ok: false, error: 'bad_pin' };
+  var guard = checkOwnerPin_(slug, body.pin);
+  if (!guard.ok) return guard;
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (err) {
+    return { ok: false, error: 'busy' };
+  }
+  try {
+    switch (body.action) {
+      case 'auth': return { ok: true };
+      case 'get': return getPageFull_(slug);
+      case 'save': return ownerSave_(slug, body);
+      default: return { ok: false, error: 'bad_action' };
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function ownerSave_(slug, body) {
+  var before = getPageFull_(slug);
+  if (!before.ok) return before;
+  var page = body.page || {};
+  page.slug = slug;
+  var res = savePage_({ isNew: false, page: page, cards: body.cards });
+  if (!res.ok) return res;
+  var lines = diff_(before, res);
+  logChange_(slug, 'owner', 'save', lines, before);
+  notifyAdmin_(res.page, lines);
+  return res;
+}
+
+function checkOwnerPin_(slug, pin) {
+  var cache = CacheService.getScriptCache();
+  var key = 'ofails:' + slug;
+  var fails = Number(cache.get(key) || 0);
+  if (fails >= MAX_FAILS) return { ok: false, error: 'locked' };
+  var stored = PropertiesService.getScriptProperties().getProperty('owner:' + slug);
+  if (stored) {
+    var parts = stored.split(':');
+    if (safeEqual_(hashPin_(parts[0], String(pin || '')), parts[1])) {
+      cache.remove(key);
+      return { ok: true };
+    }
+  }
+  cache.put(key, String(fails + 1), LOCK_SECONDS);
+  return { ok: false, error: 'bad_pin' };
+}
+
+function hashPin_(salt, pin) {
+  return Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, salt + ':' + pin, Utilities.Charset.UTF_8));
+}
+
+/** يصدر رمزًا جديدًا (يُعرض مرة واحدة ويُحفظ مشفّرًا) أو يوقف الرمز الحالي */
+function ownerPin_(slug, op) {
+  if (!findPage_(slug)) return { ok: false, error: 'not_found' };
+  var props = PropertiesService.getScriptProperties();
+  if (op === 'revoke') {
+    props.deleteProperty('owner:' + slug);
+    logChange_(slug, 'admin', 'owner_revoke', ['أوقفت الإدارة رمز التعديل لصاحب الصفحة.'], null);
+    return { ok: true };
+  }
+  if (op !== 'new') return { ok: false, error: 'bad_request' };
+  var pin = '';
+  while (pin.length < 8) pin += String(Math.floor(Math.random() * 10));
+  var salt = Utilities.getUuid();
+  props.setProperty('owner:' + slug, salt + ':' + hashPin_(salt, pin));
+  CacheService.getScriptCache().remove('ofails:' + slug);
+  logChange_(slug, 'admin', 'owner_new', ['أصدرت الإدارة رمز تعديل جديدًا لصاحب الصفحة.'], null);
+  return { ok: true, pin: pin };
+}
+
+/* ───────────────────────── عمليات الإدارة مع السجل ───────────────────────── */
+
+function adminSave_(body) {
+  var slug = String((body.page && body.page.slug) || '');
+  var before = body.isNew ? null : getPageFull_(slug);
+  var res = savePage_(body);
+  if (!res.ok) return res;
+  var lines = before && before.ok ? diff_(before, res) : ['أنشأت الإدارة الصفحة.'];
+  logChange_(slug, 'admin', body.isNew ? 'create' : 'save', lines, before && before.ok ? before : null);
+  return res;
+}
+
+function adminDelete_(slug) {
+  var before = getPageFull_(slug);
+  var res = deletePage_(slug);
+  if (res.ok) logChange_(slug, 'admin', 'delete', ['حذفت الإدارة الصفحة.'], before.ok ? before : null);
+  return res;
+}
+
+function adminDuplicate_(slug, newSlug) {
+  var res = duplicatePage_(slug, newSlug);
+  if (res.ok) logChange_(newSlug, 'admin', 'create', ['أنشأت الإدارة الصفحة نسخةً من ' + slug + '.'], null);
+  return res;
+}
+
+/* ───────────────────────── السجل ───────────────────────── */
+
+/** يحفظ ملخص التغيير ونسخة الصفحة قبله (بدون الشعارات لحجمها) ليمكن استرجاعها */
+function logChange_(slug, by, action, lines, before) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ensureSheet_(ss, SHEET_LOG, LOG_COLS);
+  var snap = '';
+  if (before && before.page) {
+    snap = JSON.stringify({
+      page: before.page,
+      cards: before.cards.map(function (c) { var o = JSON.parse(JSON.stringify(c)); delete o.logo; return o; })
+    });
+    if (snap.length > MAX_SNAPSHOT_CHARS) snap = '';
+  }
+  sh.appendRow([new Date().toISOString(), slug, by, action, lines.join('\n'), snap]);
+}
+
+function listLog_(slug, limit) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_LOG);
+  if (!sh || sh.getLastRow() < 2) return { ok: true, entries: [] };
+  var last = sh.getLastRow();
+  var values = sh.getRange(2, 1, last - 1, LOG_COLS.length).getValues();
+  var out = [];
+  for (var i = values.length - 1; i >= 0 && out.length < Math.min(limit, 300); i--) {
+    var r = values[i];
+    if (slug && String(r[1]) !== slug) continue;
+    out.push({ id: i + 2, time: String(r[0]), slug: String(r[1]), by: String(r[2]), action: String(r[3]), summary: String(r[4]), restorable: !!r[5] });
+  }
+  return { ok: true, entries: out };
+}
+
+function getLogEntry_(id) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_LOG);
+  if (!sh || !(id >= 2) || id > sh.getLastRow()) return { ok: false, error: 'not_found' };
+  var r = sh.getRange(id, 1, 1, LOG_COLS.length).getValues()[0];
+  if (!r[5]) return { ok: false, error: 'not_found' };
+  var snap = JSON.parse(String(r[5]));
+  return { ok: true, slug: String(r[1]), time: String(r[0]), page: snap.page, cards: snap.cards, exists: !!findPage_(String(r[1])) };
+}
+
+/* ───────────────────────── ملخص التغييرات ───────────────────────── */
+
+function diff_(before, after) {
+  var lines = [];
+  var a = before.page, b = after.page;
+  if (a.title !== b.title) lines.push('العنوان: «' + a.title + '» ← «' + b.title + '»');
+  if (a.beneficiary !== b.beneficiary) lines.push('الجهة المستفيدة: «' + a.beneficiary + '» ← «' + b.beneficiary + '»');
+  if (a.description !== b.description) lines.push('عدّل الوصف.');
+  if (String(a.color).toLowerCase() !== String(b.color).toLowerCase()) lines.push('اللون: ' + a.color + ' ← ' + b.color);
+
+  var oldBy = {}, newBy = {};
+  before.cards.forEach(function (c) { oldBy[c.name] = c; });
+  after.cards.forEach(function (c) { newBy[c.name] = c; });
+  after.cards.forEach(function (c) { if (!oldBy[c.name]) lines.push('أضاف بطاقة «' + c.name + '».'); });
+  before.cards.forEach(function (c) { if (!newBy[c.name]) lines.push('حذف بطاقة «' + c.name + '».'); });
+  after.cards.forEach(function (c) {
+    var o = oldBy[c.name];
+    if (!o) return;
+    var f = [];
+    if (o.purpose !== c.purpose) f.push('الهدف');
+    if (o.url !== c.url) f.push('الرابط');
+    if (o.icon !== c.icon) f.push('الأيقونة');
+    if ((o.logo || '') !== (c.logo || '')) f.push('الشعار');
+    if (f.length) lines.push('بطاقة «' + c.name + '»: عدّل ' + f.join('، ') + '.');
+    var ol = {}, nl = {};
+    (o.links || []).forEach(function (l) { ol[l.label] = l.url; });
+    (c.links || []).forEach(function (l) { nl[l.label] = l.url; });
+    Object.keys(nl).forEach(function (k) {
+      if (!(k in ol)) lines.push('بطاقة «' + c.name + '»: أضاف رابط «' + k + '».');
+      else if (ol[k] !== nl[k]) lines.push('بطاقة «' + c.name + '»: غيّر رابط «' + k + '».');
+    });
+    Object.keys(ol).forEach(function (k) { if (!(k in nl)) lines.push('بطاقة «' + c.name + '»: حذف رابط «' + k + '».'); });
+  });
+  var oldOrder = before.cards.map(function (c) { return c.name; }).filter(function (n) { return newBy[n]; }).join('|');
+  var newOrder = after.cards.map(function (c) { return c.name; }).filter(function (n) { return oldBy[n]; }).join('|');
+  if (oldOrder !== newOrder) lines.push('غيّر ترتيب البطاقات.');
+  return lines.length ? lines : ['حفظ بدون تغييرات.'];
+}
+
+function notifyAdmin_(page, lines) {
+  var to = PropertiesService.getScriptProperties().getProperty('ADMIN_EMAIL');
+  if (!to) return;
+  try {
+    MailApp.sendEmail({
+      to: to,
+      subject: 'تعديل على صفحة «' + page.title + '»',
+      body: 'عدّل صاحب الصفحة «' + page.title + '» (' + page.slug + '):\n\n- ' + lines.join('\n- ') +
+        '\n\nتجد التفاصيل ونسخة الصفحة قبل التعديل في «سجل التعديلات» بلوحة الإدارة.'
+    });
+  } catch (err) {
+    // البريد اختياري: فشل الإرسال لا يُفشل الحفظ
+  }
 }

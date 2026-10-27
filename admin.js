@@ -4,7 +4,11 @@
   var esc = Portal.esc;
   var COLORS = ['#0f766e', '#4f46e5', '#7c3aed', '#c2410c', '#be185d', '#1d4ed8'];
   var MAX_CARDS = 12;
-  var PIN_KEY = 'portalAdminPin';
+  /* admin.html?edit=slug يفتح اللوحة لصاحب الصفحة: صفحته فقط، بدون القائمة والنسخ والحذف */
+  var ownerSlug = (new URLSearchParams(location.search).get('edit') || '').toLowerCase();
+  var isOwner = /^[a-z0-9][a-z0-9-]{1,39}$/.test(ownerSlug);
+  if (isOwner) Api.setOwner(ownerSlug);
+  var PIN_KEY = isOwner ? 'portalOwnerPin:' + ownerSlug : 'portalAdminPin';
 
   var pin = '';
   var pages = [];
@@ -25,9 +29,17 @@
   function getPin() { try { return sessionStorage.getItem(PIN_KEY) || ''; } catch (e) { return ''; } }
   function setPin(v) { try { if (v) sessionStorage.setItem(PIN_KEY, v); else sessionStorage.removeItem(PIN_KEY); } catch (e) {} }
   function blankCard() { return { name: '', purpose: '', url: '', icon: 'link', logo: '', links: [] }; }
-  function shareUrl(slug) {
-    var base = location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/, '');
-    return base + '?p=' + slug;
+  function baseUrl() { return location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/, ''); }
+  function shareUrl(slug) { return baseUrl() + '?p=' + slug; }
+  function editUrl(slug) { return baseUrl() + 'admin.html?edit=' + slug; }
+  function copyText(text, done) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { toast('تعذر النسخ. انسخ النص يدويًا.', true); });
+    else toast('تعذر النسخ. انسخ النص يدويًا.', true);
+  }
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    try { return d.toLocaleString('ar-SA-u-ca-gregory', { dateStyle: 'medium', timeStyle: 'short' }); } catch (e) { return d.toLocaleString(); }
   }
   function setDirty(v) { dirty = v; $('dirty').hidden = !v; }
   function confirmLeave() { return !dirty || confirm('توجد تغييرات غير محفوظة. هل تريد المتابعة وتجاهلها؟'); }
@@ -41,7 +53,23 @@
   function enter() {
     $('login').hidden = true; $('shell').hidden = false;
     $('localBanner').hidden = Api.remote;
-    refreshList();
+    if (!isOwner) { refreshList(); return; }
+    Api.get(pin, ownerSlug).then(function (r) {
+      if (!r.ok) {
+        if (r.error === 'bad_pin' || r.error === 'locked') { setPin(''); showLogin(Api.errorText(r.error)); return; }
+        return toast(Api.errorText(r.error), true);
+      }
+      load({ isNew: false, page: r.page, cards: r.cards });
+    });
+  }
+  if (isOwner) {
+    $('shell').classList.add('owner');
+    document.querySelector('.side').hidden = true;
+    $('ownerBar').hidden = false;
+    $('loginTitle').textContent = 'تعديل صفحتك';
+    $('loginText').textContent = 'أدخل رمز التعديل الذي وصلك من الإدارة.';
+    document.title = 'تعديل الصفحة';
+    $('ownerLogout').addEventListener('click', function () { $('logout').click(); });
   }
   $('loginForm').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -72,7 +100,7 @@
     $('pageList').innerHTML = pages.length ? pages.map(function (p) {
       return '<button type="button" class="pitem' + (p.slug === active ? ' on' : '') + '" data-slug="' + esc(p.slug) + '">' +
         '<b><i style="background:' + esc(p.color) + '"></i>' + esc(p.title) + '</b>' +
-        '<span>' + esc(p.beneficiary || '—') + ' · ' + p.cardCount + ' بطاقة</span></button>';
+        '<span>' + esc(p.beneficiary || '—') + ' · ' + p.cardCount + ' بطاقة' + (p.hasOwner ? ' · <em>لها صاحب</em>' : '') + '</span></button>';
     }).join('') : '<small>لا توجد صفحات بعد.</small>';
   }
   $('pageList').addEventListener('click', function (e) {
@@ -92,13 +120,15 @@
   /* ───── المحرر ───── */
   function load(state) {
     cur = state; openIdx = 0; setDirty(false);
-    $('emptyMain').hidden = true; $('editor').hidden = false; $('previewCol').hidden = false;
+    $('emptyMain').hidden = true; $('logView').hidden = true; $('editor').hidden = false; $('previewCol').hidden = false;
     var p = cur.page;
     $('fTitle').value = p.title; $('fBen').value = p.beneficiary || ''; $('fDesc').value = p.description || '';
     $('fSlug').value = p.slug; $('fSlug').readOnly = !cur.isNew;
     $('slugHint').textContent = cur.isNew ? 'أحرف إنجليزية صغيرة وأرقام وشرطة. لا يمكن تغييره بعد الحفظ.' : 'لا يمكن تغيير الرابط بعد الحفظ.';
-    $('dupBtn').hidden = $('delBtn').hidden = cur.isNew;
-    renderSwatches(); renderCards(); renderShare(); renderList(cur.isNew ? '' : p.slug);
+    $('dupBtn').hidden = $('delBtn').hidden = cur.isNew || isOwner;
+    if (isOwner) { $('fSlug').readOnly = true; $('slugHint').textContent = 'الرابط المختصر ثابت لا يتغير.'; }
+    $('ownerNew').hidden = true;
+    renderSwatches(); renderCards(); renderShare(); renderOwner(); renderList(cur.isNew ? '' : p.slug);
     schedulePreview(); fitPreview();
   }
 
@@ -354,13 +384,14 @@
     Api.save(pin, cur.isNew, d.page, d.cards).then(function (r) {
       btn.disabled = false;
       if (!r.ok) {
-        if (r.error === 'bad_pin') { showLogin('انتهت الجلسة. أدخل الرمز مجددًا.'); return; }
+        if (r.error === 'bad_pin') { setPin(''); showLogin(isOwner ? 'رمز التعديل تغيّر أو أُوقف. تواصل مع الإدارة.' : 'انتهت الجلسة. أدخل الرمز مجددًا.'); return; }
         return toast(Api.errorText(r.error), true);
       }
-      toast('تم حفظ الصفحة');
       cur = { isNew: false, page: r.page, cards: r.cards }; setDirty(false);
+      if (isOwner) { toast('تم حفظ التعديلات، وظهرت في الصفحة.'); renderShare(); return; }
+      toast('تم حفظ الصفحة');
       $('fSlug').readOnly = true; $('dupBtn').hidden = $('delBtn').hidden = false;
-      renderShare(); refreshList(cur.page.slug);
+      renderShare(); renderOwner(); refreshList(cur.page.slug);
     });
   });
   $('dupBtn').addEventListener('click', function () {
@@ -381,12 +412,106 @@
     });
   });
 
+  /* ───── صاحب الصفحة (للإدارة) ───── */
+  function curPageInfo() {
+    if (!cur || cur.isNew) return null;
+    for (var i = 0; i < pages.length; i++) if (pages[i].slug === cur.page.slug) return pages[i];
+    return null;
+  }
+  function renderOwner() {
+    var info = curPageInfo();
+    $('ownerPanel').hidden = isOwner || !cur || cur.isNew || !Api.remote;
+    if ($('ownerPanel').hidden) return;
+    var has = !!(info && info.hasOwner);
+    $('ownerStatus').textContent = has
+      ? 'لهذه الصفحة رمز تعديل فعّال. صاحبها يعدّل من رابط التعديل، وكل تعديل يصلك بالبريد ويظهر في السجل.'
+      : 'لا يوجد رمز تعديل. أصدر رمزًا ليعدّل صاحب الصفحة بطاقاتها بنفسه، دون أن يرى صفحات أخرى.';
+    $('ownerIssue').textContent = has ? 'إصدار رمز جديد' : 'إصدار رمز تعديل';
+    $('ownerRevoke').hidden = !has;
+  }
+  $('ownerIssue').addEventListener('click', function () {
+    var info = curPageInfo();
+    if (info && info.hasOwner && !confirm('سيتوقف الرمز الحالي ويحتاج صاحب الصفحة الرمز الجديد. متابعة؟')) return;
+    var slug = cur.page.slug; var btn = this; btn.disabled = true;
+    Api.ownerPin(pin, slug, 'new').then(function (r) {
+      btn.disabled = false;
+      if (!r.ok) return toast(Api.errorText(r.error), true);
+      if (info) info.hasOwner = true;
+      $('ownerUrl').textContent = editUrl(slug); $('ownerPin').textContent = r.pin; $('ownerNew').hidden = false;
+      renderOwner(); renderList(slug);
+    });
+  });
+  $('ownerCopy').addEventListener('click', function () {
+    copyText('رابط تعديل صفحتك: ' + $('ownerUrl').textContent + '\nرمز التعديل: ' + $('ownerPin').textContent, function () { toast('تم النسخ'); });
+  });
+  $('ownerRevoke').addEventListener('click', function () {
+    if (!confirm('سيتوقف رابط التعديل عن العمل لصاحب الصفحة. متابعة؟')) return;
+    var info = curPageInfo();
+    Api.ownerPin(pin, cur.page.slug, 'revoke').then(function (r) {
+      if (!r.ok) return toast(Api.errorText(r.error), true);
+      if (info) info.hasOwner = false;
+      $('ownerNew').hidden = true; toast('تم إيقاف الرمز'); renderOwner(); renderList(cur.page.slug);
+    });
+  });
+
+  /* ───── سجل التعديلات ───── */
+  var LOG_ACTIONS = { save: 'تعديل', create: 'إنشاء', 'delete': 'حذف', owner_new: 'رمز تعديل', owner_revoke: 'إيقاف رمز' };
+  function pageTitle(slug) {
+    for (var i = 0; i < pages.length; i++) if (pages[i].slug === slug) return pages[i].title;
+    return slug;
+  }
+  function showLog(slug) {
+    if (!Api.remote) return toast(Api.errorText('remote_only'), true);
+    $('editor').hidden = true; $('previewCol').hidden = true; $('emptyMain').hidden = true; $('logView').hidden = false;
+    $('logTitle').textContent = slug ? 'سجل «' + pageTitle(slug) + '»' : 'سجل التعديلات';
+    $('logList').innerHTML = '<small>جارٍ التحميل…</small>';
+    Api.log(pin, slug).then(function (r) {
+      if (!r.ok) { $('logList').innerHTML = ''; return toast(Api.errorText(r.error), true); }
+      $('logList').innerHTML = r.entries.length ? r.entries.map(function (e) {
+        var who = e.by === 'owner' ? '<span class="chip chip--owner">صاحب الصفحة</span>' : '<span class="chip chip--admin">الإدارة</span>';
+        return '<div class="log-item"><div class="log-item__head"><b>' + esc(pageTitle(e.slug)) + '</b>' + who +
+          '<small>' + esc(LOG_ACTIONS[e.action] || e.action) + '</small><time datetime="' + esc(e.time) + '">' + esc(fmtTime(e.time)) + '</time></div>' +
+          '<ul>' + e.summary.split('\n').map(function (l) { return '<li>' + esc(l) + '</li>'; }).join('') + '</ul>' +
+          (e.restorable ? '<button type="button" class="btn btn--sm" data-restore="' + e.id + '">استرجاع الصفحة كما كانت قبل هذا</button>' : '') + '</div>';
+      }).join('') : '<small>لا توجد تعديلات مسجلة بعد.</small>';
+    });
+  }
+  $('logBtn').addEventListener('click', function () { if (confirmLeave()) { setDirty(false); showLog(''); } });
+  $('pageLogBtn').addEventListener('click', function () { if (confirmLeave()) { var s = cur.page.slug; setDirty(false); showLog(s); } });
+  $('logClose').addEventListener('click', function () {
+    $('logView').hidden = true;
+    if (cur) { $('editor').hidden = false; $('previewCol').hidden = false; fitPreview(); } else $('emptyMain').hidden = false;
+  });
+  /* الاسترجاع يحمّل النسخة في المحرر فقط، ولا يُحفظ حتى تراجعها وتضغط حفظ. الشعارات لا تُحفظ في السجل لحجمها، فتؤخذ من البطاقات الحالية بالاسم نفسه. */
+  $('logList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-restore]'); if (!b) return;
+    Api.logEntry(pin, +b.getAttribute('data-restore')).then(function (r) {
+      if (!r.ok) return toast(Api.errorText(r.error), true);
+      var restore = function (logos) {
+        var cards = r.cards.map(function (c) {
+          return { name: c.name, purpose: c.purpose || '', url: c.url, icon: c.icon || 'link', logo: logos[c.name] || '', links: c.links || [] };
+        });
+        load({ isNew: !r.exists, page: r.page, cards: cards });
+        setDirty(true); schedulePreview();
+        toast(r.exists ? 'حُمّلت النسخة السابقة في المحرر. راجعها ثم اضغط حفظ.' : 'الصفحة محذوفة. راجع النسخة ثم اضغط حفظ لإعادتها.');
+      };
+      if (!r.exists) return restore({});
+      Api.get(pin, r.slug).then(function (g) {
+        var logos = {};
+        if (g.ok) g.cards.forEach(function (c) { if (c.logo) logos[c.name] = c.logo; });
+        restore(logos);
+      });
+    });
+  });
+
   window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
   /* ───── البداية ───── */
   pin = getPin();
   if (pin) {
     Api.auth(pin).then(function (r) { if (r.ok) enter(); else { setPin(''); showLogin(); } });
+  } else if (isOwner && !Api.remote) {
+    showLogin(Api.errorText('remote_only'));
   } else if (!Api.remote) {
     // الوضع التجريبي لا يحتاج رمزًا
     pin = 'local'; enter();

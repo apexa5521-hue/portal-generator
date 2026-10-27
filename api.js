@@ -35,6 +35,8 @@
     bad_request: 'تعذر فهم الطلب.',
     server: 'حدث خطأ في الخادم. أعد المحاولة.',
     network: 'تعذر الاتصال بالخادم. تحقق من الإنترنت ومن رابط Apps Script في config.js.',
+    remote_only: 'هذه الميزة تعمل بعد ربط Apps Script فقط.',
+    bad_action: 'الخادم لا يعرف هذا الطلب. حدّث Code.gs في Apps Script وانشر نسخة جديدة.',
     'invalid:slug': 'الرابط المختصر يقبل أحرفًا إنجليزية صغيرة وأرقامًا وشرطة فقط (من حرفين إلى 40).',
     'invalid:title': 'اكتب عنوان الصفحة (حتى 80 حرفًا).',
     'invalid:beneficiary': 'نص الجهة المستفيدة طويل (الحد 60 حرفًا).',
@@ -133,6 +135,7 @@
       lsWrite(db);
       return { ok: true };
     }
+    if (a === 'ownerPin' || a === 'log' || a === 'logEntry' || body.role === 'owner') return { ok: false, error: 'remote_only' };
     if (a === 'duplicate') {
       var src = db.pages[body.slug];
       if (!src) return { ok: false, error: 'not_found' };
@@ -158,7 +161,11 @@
     }).then(function (r) { return r.json(); });
   }
 
+  /* وضع صاحب الصفحة: كل الطلبات تذهب باسم صفحته فقط، والخادم يتحقق من رمزها */
+  var ownerSlug = '';
+
   function call(body) {
+    if (ownerSlug) { body.role = 'owner'; body.slug = ownerSlug; }
     if (!remote) return Promise.resolve(localCall(body));
     return remotePost(body).catch(function () { return { ok: false, error: 'network' }; });
   }
@@ -184,6 +191,10 @@
     get: function (pin, slug) { return call({ action: 'get', pin: pin, slug: slug }); },
     save: function (pin, isNew, page, cards) { return call({ action: 'save', pin: pin, isNew: !!isNew, page: page, cards: cards }); },
     remove: function (pin, slug) { return call({ action: 'delete', pin: pin, slug: slug }); },
-    duplicate: function (pin, slug, newSlug) { return call({ action: 'duplicate', pin: pin, slug: slug, newSlug: newSlug }); }
+    duplicate: function (pin, slug, newSlug) { return call({ action: 'duplicate', pin: pin, slug: slug, newSlug: newSlug }); },
+    ownerPin: function (pin, slug, op) { return call({ action: 'ownerPin', pin: pin, slug: slug, op: op }); },
+    log: function (pin, slug) { return call({ action: 'log', pin: pin, slug: slug || '' }); },
+    logEntry: function (pin, id) { return call({ action: 'logEntry', pin: pin, id: id }); },
+    setOwner: function (slug) { ownerSlug = slug || ''; }
   };
 })(window);

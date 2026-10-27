@@ -13,8 +13,8 @@
 <body>
 <div id="login" class="login" hidden>
   <form class="login__box" id="loginForm" autocomplete="off">
-    <h1>لوحة الإدارة</h1>
-    <p>أدخل رمز الدخول للمتابعة.</p>
+    <h1 id="loginTitle">لوحة الإدارة</h1>
+    <p id="loginText">أدخل رمز الدخول للمتابعة.</p>
     <input id="pin" type="password" inputmode="numeric" placeholder="رمز الدخول" autocomplete="off" required>
     <button class="btn btn--primary" type="submit">دخول</button>
     <div class="login__err" id="loginErr" role="alert"></div>
@@ -28,12 +28,25 @@
       <button class="btn btn--ghost btn--sm" id="logout" type="button">خروج</button>
     </div>
     <button class="btn btn--primary btn--block" id="newPage" type="button">+ صفحة جديدة</button>
+    <button class="btn btn--block" id="logBtn" type="button">سجل التعديلات</button>
     <nav class="side__list" id="pageList" aria-label="الصفحات"></nav>
   </aside>
 
   <main class="main">
+    <div class="ownerbar" id="ownerBar" hidden>
+      <span>تعديل صفحتك. ما تحفظه يظهر للمستفيدين مباشرة، وتصل الإدارة نسخة منه.</span>
+      <button class="btn btn--ghost btn--sm" id="ownerLogout" type="button">خروج</button>
+    </div>
     <div class="banner" id="localBanner" hidden>الوضع التجريبي: البيانات تُحفظ في هذا المتصفح فقط. ضع رابط Apps Script في config.js لحفظها في Google Sheets.</div>
     <div class="empty-main" id="emptyMain">اختر صفحة من القائمة أو أنشئ صفحة جديدة.</div>
+
+    <section class="panel" id="logView" hidden>
+      <div class="panel__head">
+        <h2 id="logTitle">سجل التعديلات</h2>
+        <button class="btn btn--sm" id="logClose" type="button">رجوع</button>
+      </div>
+      <div id="logList" class="log"></div>
+    </section>
 
     <div class="editor" id="editor" hidden>
       <section class="panel">
@@ -87,6 +100,22 @@
           </div>
           <div class="share__qr" id="qr"></div>
           <small id="shareNote">يظهر الرابط بعد حفظ الصفحة.</small>
+        </div>
+      </section>
+
+      <section class="panel" id="ownerPanel" hidden>
+        <h2>صاحب الصفحة</h2>
+        <p class="hint" id="ownerStatus"></p>
+        <div class="owner-new" id="ownerNew" hidden>
+          <p>أرسل لصاحب الصفحة الرابط والرمز. <b>الرمز يظهر هذه المرة فقط.</b></p>
+          <div class="owner-new__row"><span>رابط التعديل</span><code id="ownerUrl" dir="ltr"></code></div>
+          <div class="owner-new__row"><span>الرمز</span><code id="ownerPin" dir="ltr"></code></div>
+          <button class="btn btn--sm btn--primary" id="ownerCopy" type="button">نسخ الرابط والرمز</button>
+        </div>
+        <div class="share__row">
+          <button class="btn btn--primary" id="ownerIssue" type="button">إصدار رمز تعديل</button>
+          <button class="btn btn--danger" id="ownerRevoke" type="button">إيقاف الرمز</button>
+          <button class="btn" id="pageLogBtn" type="button">سجل هذه الصفحة</button>
         </div>
       </section>
 
