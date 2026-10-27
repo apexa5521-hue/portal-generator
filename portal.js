@@ -38,6 +38,9 @@
 
   var ARROW = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 17V7h10"/><path d="M17 17 7 7"/></svg>';
 
+  var SHEET = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/></svg>';
+  var EXTERNAL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+
   /* ───── الألوان ───── */
   function hexToRgb(h) {
     var m = /^#?([0-9a-f]{6})$/i.exec(h || '');
@@ -69,6 +72,8 @@
       dark: toHex(mix(rgb, 0, 0.3)),
       soft: rgba(rgb, 0.1),
       glow: rgba(rgb, 0.14),
+      bright: toHex(mix(rgb, 255, 0.4)),
+      dot: rgba(rgb, 0.2),
       tint: toHex(mix(rgb, 255, 0.88))
     };
   }
@@ -76,6 +81,7 @@
   /* ───── نصوص ───── */
   function countLabel(n) {
     var f = new Intl.NumberFormat('ar-SA').format(n);
+    if (!n) return 'لا توجد أنظمة بعد';
     if (n === 1) return 'نظام واحد متاح';
     if (n === 2) return 'نظامان متاحان';
     if (n >= 3 && n <= 10) return f + ' أنظمة متاحة';
@@ -94,19 +100,65 @@
 
   function cfg() { return global.PORTAL_CONFIG || {}; }
 
-  function cardHtml(c) {
+  /* اسم المنشأة اختياري: يُحذف من الرأس كليًا عند تركه فارغًا في config.js */
+  function brandHtml(withSub) {
+    var c = cfg();
+    if (!c.ORG_NAME && !(withSub && c.ORG_SUB)) return '';
+    return '<div class="brand">' + (c.ORG_NAME ? '<span class="brand__name">' + esc(c.ORG_NAME) + '</span>' : '') +
+      (withSub && c.ORG_SUB ? '<span class="brand__sub">' + esc(c.ORG_SUB) + '</span>' : '') + '</div>';
+  }
+
+  function cardHtml(c, i) {
     var logo = safeLogo(c.logo);
     var icon = logo
       ? '<span class="card__icon card__icon--logo"><img src="' + logo + '" alt=""></span>'
       : '<span class="card__icon">' + svg(c.icon, 32, 1.8) + '</span>';
     var big = logo ? '' : '<span class="card__big" aria-hidden="true">' + svg(c.icon, 200, 1.1) + '</span>';
-    return '<a class="card" href="' + esc(safeUrl(c.url)) + '" rel="noopener">' +
-      '<span class="card__fill" aria-hidden="true"></span>' + big +
-      '<span class="card__body">' + icon +
-      '<span class="card__text"><span class="card__name">' + esc(c.name) + '</span>' +
-      '<span class="card__purpose">' + esc(c.purpose) + '</span></span>' +
-      '<span class="card__go"><span>الدخول إلى النظام</span><span class="card__arrow">' + ARROW + '</span></span>' +
-      '</span></a>';
+    var href = esc(safeUrl(c.url));
+    var links = (c.links || []).filter(function (l) { return l && l.label; });
+    var deco = '<span class="card__fill" aria-hidden="true"></span><span class="card__spot" aria-hidden="true"></span>' + big;
+    var purpose = '<span class="card__purpose">' + esc(c.purpose) + '</span>';
+    var go = '<span class="card__go"><span>الدخول إلى النظام</span><span class="card__arrow">' + ARROW + '</span></span>';
+    var glow = '<span class="card__glow" aria-hidden="true"></span>';
+    if (!links.length) {
+      return '<a class="card" href="' + href + '" rel="noopener" style="--i:' + (i || 0) + '">' + deco +
+        '<span class="card__body">' + icon + '<span class="card__text"><span class="card__name">' + esc(c.name) + '</span>' + purpose + '</span>' +
+        go + '</span>' + glow + '</a>';
+    }
+    /* بطاقة فيها روابط إضافية: لا يجوز رابط داخل رابط، فيصير اسم المنصة هو الرابط الرئيسي ويمتد ليغطي البطاقة،
+       وتعلوه روابط الشيت وتفتح في تبويب جديد. */
+    var list = '<ul class="card__links" aria-label="روابط ' + esc(c.name) + '">' + links.map(function (l) {
+      return '<li><a href="' + esc(safeUrl(l.url)) + '" target="_blank" rel="noopener">' + SHEET + '<span>' + esc(l.label) + '</span>' + EXTERNAL + '</a></li>';
+    }).join('') + '</ul>';
+    return '<div class="card card--links" style="--i:' + (i || 0) + '">' + deco +
+      '<div class="card__body">' + icon + '<div class="card__text"><a class="card__name card__main" href="' + href + '" rel="noopener">' + esc(c.name) + '</a>' +
+      purpose + list + '</div>' + go + '</div>' + glow + '</div>';
+  }
+
+  /* يتتبع المؤشر مرة واحدة على مستوى الصفحة ويحدّث البطاقات القريبة منه فقط (أجهزة الماوس فقط). */
+  var glowBound = false;
+  function bindGlow() {
+    if (glowBound || !global.matchMedia || !global.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+    glowBound = true;
+    var doc = global.document, px = -9999, py = -9999, raf = 0, NEAR = 72;
+    function update() {
+      raf = 0;
+      var cards = doc.querySelectorAll('.card');
+      for (var i = 0; i < cards.length; i++) {
+        var el = cards[i], r = el.getBoundingClientRect();
+        var near = px > r.left - NEAR && px < r.right + NEAR && py > r.top - NEAR && py < r.bottom + NEAR;
+        el.style.setProperty('--glow-on', near ? '1' : '0');
+        if (!near) continue;
+        var a = Math.atan2(py - (r.top + r.height / 2), px - (r.left + r.width / 2)) * 180 / Math.PI + 90;
+        el.style.setProperty('--glow-angle', a.toFixed(1) + 'deg');
+        el.style.setProperty('--mx', (px - r.left).toFixed(0) + 'px');
+        el.style.setProperty('--my', (py - r.top).toFixed(0) + 'px');
+      }
+    }
+    function queue() { if (!raf) raf = global.requestAnimationFrame(update); }
+    doc.addEventListener('pointermove', function (e) { px = e.clientX; py = e.clientY; queue(); }, { passive: true });
+    doc.addEventListener('mouseout', function (e) { if (!e.relatedTarget) { px = py = -9999; queue(); } });
+    global.addEventListener('scroll', queue, { passive: true });
   }
 
   /** يرسم الصفحة داخل العنصر root (له الصنف portal). */
@@ -121,16 +173,18 @@
     st.setProperty('--accent-soft', pal.soft);
     st.setProperty('--accent-glow', pal.glow);
     st.setProperty('--on-fill-desc', pal.tint);
+    st.setProperty('--accent-bright', pal.bright);
+    st.setProperty('--dot', pal.dot);
+    root.classList.toggle('portal--enter', !opts.preview);
 
     var c = cfg();
     var title = page.title || '';
     if (!opts.preview && global.document) {
-      global.document.title = title ? title + ' · ' + (c.ORG_NAME || '') : (c.ORG_NAME || '');
+      global.document.title = [title, c.ORG_NAME].filter(Boolean).join(' · ') || 'بوابة الأنظمة';
     }
 
-    var html = '<div class="portal__glow"></div><div class="portal__inner">' +
-      '<header class="portal__header"><div class="brand"><span class="brand__name">' + esc(c.ORG_NAME || '') + '</span>' +
-      '<span class="brand__sub">' + esc(c.ORG_SUB || '') + '</span></div>' +
+    var html = '<div class="portal__glow"></div><div class="portal__dots"></div><div class="portal__inner">' +
+      '<header class="portal__header">' + brandHtml(true) +
       '<div class="count-chip"><span class="count-chip__dot"></span><span>' + esc(countLabel(cards.length)) + '</span></div></header>' +
       '<section class="hero">' +
       (page.beneficiary ? '<div class="hero__tag">' + esc(page.beneficiary) + '</div>' : '') +
@@ -143,9 +197,10 @@
       '</div>' +
       (c.FOOTER ? '<footer class="portal__footer">' + esc(c.FOOTER) + '</footer>' : '');
     root.innerHTML = html;
+    bindGlow();
 
     if (opts.preview) {
-      var links = root.querySelectorAll('a.card');
+      var links = root.querySelectorAll('a.card, .card a');
       for (var i = 0; i < links.length; i++) {
         links[i].addEventListener('click', function (e) { e.preventDefault(); });
       }
@@ -153,16 +208,16 @@
   }
 
   function renderNotice(root, title, text) {
-    var c = cfg();
+    var brand = brandHtml(true);
     root.style.removeProperty('--accent');
-    root.innerHTML = '<div class="portal__inner"><header class="portal__header"><div class="brand"><span class="brand__name">' + esc(c.ORG_NAME || '') +
-      '</span><span class="brand__sub">' + esc(c.ORG_SUB || '') + '</span></div></header>' +
+    root.innerHTML = '<div class="portal__inner">' + (brand ? '<header class="portal__header">' + brand + '</header>' : '') +
       '<div class="notice"><h2>' + esc(title) + '</h2><p>' + esc(text) + '</p></div></div>';
   }
 
   function renderLoading(root) {
-    root.innerHTML = '<div class="portal__inner"><header class="portal__header"><div class="brand"><span class="brand__name">' +
-      esc(cfg().ORG_NAME || '') + '</span></div></header><section class="grid" aria-busy="true">' +
+    var brand = brandHtml(false);
+    root.innerHTML = '<div class="portal__inner">' + (brand ? '<header class="portal__header">' + brand + '</header>' : '') +
+      '<section class="grid" aria-busy="true" style="margin-top:28px">' +
       '<div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></section></div>';
   }
 

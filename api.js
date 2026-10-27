@@ -6,6 +6,7 @@
   var remote = !!cfg.API_URL;
   var LS_KEY = 'portalGenerator.v1';
   var MAX_CARDS = 12;
+  var MAX_LINKS = 6;
   var ICON_KEYS = (global.Portal && global.Portal.ICON_KEYS) || [];
 
   var SAMPLE = {
@@ -17,7 +18,8 @@
       color: '#0f766e'
     },
     cards: [
-      { name: 'جاهزية الكوادر', purpose: 'متابعة اكتمال مستندات الموظفين وتراخيصهم.', url: '#', icon: 'check' },
+      { name: 'جاهزية الكوادر', purpose: 'متابعة اكتمال مستندات الموظفين وتراخيصهم.', url: '#', icon: 'check',
+        links: [{ label: 'سجل التراخيص', url: '#' }, { label: 'متابعة الشهادات', url: '#' }] },
       { name: 'توقيع السياسات', purpose: 'اطلاع الموظفين على السياسات وتوقيعها إلكترونيًا.', url: '#', icon: 'sign' },
       { name: 'استبيان راحة الموظفين', purpose: 'قياس رضا الكوادر وجمع ملاحظاتهم.', url: '#', icon: 'smile' },
       { name: 'منصة التدريب', purpose: 'الدورات والاختبارات التدريبية ونتائجها.', url: '#', icon: 'cap' }
@@ -33,6 +35,8 @@
     bad_request: 'تعذر فهم الطلب.',
     server: 'حدث خطأ في الخادم. أعد المحاولة.',
     network: 'تعذر الاتصال بالخادم. تحقق من الإنترنت ومن رابط Apps Script في config.js.',
+    remote_only: 'هذه الميزة تعمل بعد ربط Apps Script فقط.',
+    bad_action: 'الخادم لا يعرف هذا الطلب. حدّث Code.gs في Apps Script وانشر نسخة جديدة.',
     'invalid:slug': 'الرابط المختصر يقبل أحرفًا إنجليزية صغيرة وأرقامًا وشرطة فقط (من حرفين إلى 40).',
     'invalid:title': 'اكتب عنوان الصفحة (حتى 80 حرفًا).',
     'invalid:beneficiary': 'نص الجهة المستفيدة طويل (الحد 60 حرفًا).',
@@ -46,7 +50,8 @@
     var m = /^invalid:card(\d+):(\w+)$/.exec(code || '');
     if (m) {
       var n = Number(m[1]) + 1;
-      var f = { name: 'اسم المنصة', purpose: 'الهدف', url: 'الرابط (يبدأ بـ https://)', icon: 'الأيقونة', logo: 'الشعار' }[m[2]] || m[2];
+      var f = { name: 'اسم المنصة', purpose: 'الهدف', url: 'الرابط (يبدأ بـ https://)', icon: 'الأيقونة', logo: 'الشعار',
+        links: 'الروابط الإضافية (لكل رابط اسم حتى 40 حرفًا ورابط يبدأ بـ https://، وبحد أقصى ' + MAX_LINKS + ')' }[m[2]] || m[2];
       return 'البطاقة ' + n + ': تحقق من ' + f + '.';
     }
     return MESSAGES.server;
@@ -69,8 +74,19 @@
       if (c.logo && (!/^data:image\/(png|webp|jpeg|svg\+xml);base64,[A-Za-z0-9+\/=]+$/.test(String(c.logo)) || String(c.logo).length > 40000)) {
         return 'invalid:card' + i + ':logo';
       }
+      if (c.links != null && !validLinks(c.links)) return 'invalid:card' + i + ':links';
     }
     return null;
+  }
+
+  function validLinks(links) {
+    if (!Array.isArray(links) || links.length > MAX_LINKS) return false;
+    for (var j = 0; j < links.length; j++) {
+      var l = links[j] || {};
+      if (!String(l.label || '').trim() || String(l.label).length > 40) return false;
+      if (!/^https?:\/\/\S+$/i.test(String(l.url || '')) || String(l.url).length > 600) return false;
+    }
+    return true;
   }
 
   /* ───── الوضع التجريبي (المتصفح) ───── */
@@ -119,6 +135,7 @@
       lsWrite(db);
       return { ok: true };
     }
+    if (a === 'ownerPin' || a === 'log' || a === 'logEntry' || body.role === 'owner') return { ok: false, error: 'remote_only' };
     if (a === 'duplicate') {
       var src = db.pages[body.slug];
       if (!src) return { ok: false, error: 'not_found' };
@@ -144,7 +161,11 @@
     }).then(function (r) { return r.json(); });
   }
 
+  /* وضع صاحب الصفحة: كل الطلبات تذهب باسم صفحته فقط، والخادم يتحقق من رمزها */
+  var ownerSlug = '';
+
   function call(body) {
+    if (ownerSlug) { body.role = 'owner'; body.slug = ownerSlug; }
     if (!remote) return Promise.resolve(localCall(body));
     return remotePost(body).catch(function () { return { ok: false, error: 'network' }; });
   }
@@ -162,6 +183,7 @@
     remote: remote,
     sample: function () { return clone(SAMPLE); },
     validate: validate,
+    MAX_LINKS: MAX_LINKS,
     errorText: errorText,
     getPublic: getPublic,
     auth: function (pin) { return call({ action: 'auth', pin: pin }); },
@@ -169,6 +191,10 @@
     get: function (pin, slug) { return call({ action: 'get', pin: pin, slug: slug }); },
     save: function (pin, isNew, page, cards) { return call({ action: 'save', pin: pin, isNew: !!isNew, page: page, cards: cards }); },
     remove: function (pin, slug) { return call({ action: 'delete', pin: pin, slug: slug }); },
-    duplicate: function (pin, slug, newSlug) { return call({ action: 'duplicate', pin: pin, slug: slug, newSlug: newSlug }); }
+    duplicate: function (pin, slug, newSlug) { return call({ action: 'duplicate', pin: pin, slug: slug, newSlug: newSlug }); },
+    ownerPin: function (pin, slug, op) { return call({ action: 'ownerPin', pin: pin, slug: slug, op: op }); },
+    log: function (pin, slug) { return call({ action: 'log', pin: pin, slug: slug || '' }); },
+    logEntry: function (pin, id) { return call({ action: 'logEntry', pin: pin, id: id }); },
+    setOwner: function (slug) { ownerSlug = slug || ''; }
   };
 })(window);
