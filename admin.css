@@ -34,7 +34,7 @@ small { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
 
 .shell { display: grid; grid-template-columns: 260px minmax(0, 1fr) 480px; min-height: 100vh; }
 .shell.owner { grid-template-columns: minmax(0, 1fr) 480px; }
-.ownerbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #e6f2f1; border: 1px solid #b7d9d6; color: var(--brand-dark); padding: 10px 14px; border-radius: 10px; margin-bottom: 16px; font-size: 14px; line-height: 1.7; }
+.ownerbar { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 .side { background: #fff; border-inline-end: 1px solid var(--line); padding: 18px; display: flex; flex-direction: column; gap: 14px; position: sticky; top: 0; height: 100vh; overflow: auto; }
 .side__head { display: flex; align-items: center; justify-content: space-between; }
 .side__list { display: flex; flex-direction: column; gap: 6px; }
