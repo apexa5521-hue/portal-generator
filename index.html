@@ -16,6 +16,7 @@
 <script src="config.js"></script>
 <script src="portal.js"></script>
 <script src="api.js"></script>
+<script src="sso.js"></script>
 <script>
 (function () {
   var root = document.getElementById('app');
@@ -41,6 +42,7 @@
   Api.getPublic(slug).then(function (res) {
     if (res && res.ok) {
       Portal.render(root, res);
+      if (window.Sso) Sso.attach(root);
     } else if (res && res.error === 'not_found') {
       Portal.renderNotice(root, 'الصفحة غير موجودة', 'تأكد من الرابط، أو تواصل مع إدارة الجودة والتحول الرقمي.');
     } else {

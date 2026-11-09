@@ -83,6 +83,7 @@ function doGet(e) {
     if (p.action === 'page') {
       return json_(getPublicPage_(String(p.slug || '')));
     }
+    if (p.action === 'sso') return json_({ ok: true, sso: true });
     return json_({ ok: true, service: 'portal-generator' });
   } catch (err) {
     return json_({ ok: false, error: 'server' });
@@ -97,6 +98,7 @@ function doPost(e) {
     return json_({ ok: false, error: 'bad_request' });
   }
   if (body && body.role === 'owner') return json_(ownerCall_(body));
+  if (body && /^emp[A-Z]/.test(String(body.action || ''))) return json_(empCall_(body));
   var guard = checkPin_(body && body.pin);
   if (!guard.ok) return json_(guard);
 
@@ -578,3 +580,292 @@ function notifyAdmin_(page, lines) {
     // البريد اختياري: فشل الإرسال لا يُفشل الحفظ
   }
 }
+
+
+/* ───────────────────────── الدخول الموحد (SSO) ─────────────────────────
+ * الموظف يسجل دخوله في البوابة مرة واحدة ببريده وكلمة مرور البوابة. عند ضغطه على بطاقة منصة مربوطة،
+ * يصدر الخادم «تذكرة» موقّعة (JWT بخوارزمية HS256) صالحة لدقيقة واحدة ولاستخدام واحد، بمفتاح سري خاص
+ * بتلك المنصة وحدها، وتفتح المنصة على: رابطها#sso=التذكرة. المنصة تتحقق من التوقيع وتُدخله على حسابه فيها.
+ * الدخول العادي في كل منصة يبقى كما هو.
+ *
+ * الجداول (تُنشأ من القائمة: الدخول الموحد ← تجهيز الجداول):
+ *   Employees : الموظفون وكلمات مرور البوابة (مشفّرة). عبّئ email و name و active فقط.
+ *   SsoApps   : المنصات المربوطة: app_id (نفس SSO_APP_ID في المنصة)، الاسم، الرابط الذي تُفتح عليه، active.
+ *   SsoLinks  : ربط الموظف بحسابه في كل منصة: email، app_id، login (اسم الدخول أو البريد في تلك المنصة).
+ *   SsoLog    : سجل كل دخول موحد.
+ * المفاتيح السرية للمنصات تُحفظ في Script Properties فقط، ولا تظهر في الشيت.
+ */
+
+var SHEET_EMP = 'Employees';
+var SHEET_APPS = 'SsoApps';
+var SHEET_LINKS = 'SsoLinks';
+var SHEET_SSO_LOG = 'SsoLog';
+var EMP_COLS = ['email', 'name', 'active', 'password_hash', 'must_change', 'created_at', 'last_login'];
+var APP_COLS = ['app_id', 'name', 'url', 'active'];
+var LINK_COLS = ['email', 'app_id', 'login'];
+var SSO_LOG_COLS = ['time', 'email', 'app_id', 'login', 'result'];
+var EMP_SESSION_SECONDS = 21600;   // 6 ساعات (أقصى مدة للكاش في Apps Script)
+var TICKET_SECONDS = 60;
+var PW_ROUNDS = 1000;
+var SSO_ISSUER = 'apex-portal';
+
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('الدخول الموحد')
+    .addItem('تجهيز الجداول', 'setupSso')
+    .addSeparator()
+    .addItem('كلمة مرور مؤقتة للموظف المحدد', 'issueTempPasswordForSelectedEmployee')
+    .addItem('مفتاح جديد للمنصة المحددة', 'issueSecretForSelectedApp')
+    .addToUi();
+}
+
+function setupSso() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ensureSheet_(ss, SHEET_EMP, EMP_COLS);
+  ensureSheet_(ss, SHEET_APPS, APP_COLS);
+  ensureSheet_(ss, SHEET_LINKS, LINK_COLS);
+  ensureSheet_(ss, SHEET_SSO_LOG, SSO_LOG_COLS);
+  Logger.log('تم تجهيز جداول الدخول الموحد: Employees و SsoApps و SsoLinks و SsoLog.');
+}
+
+/* ───── أدوات الإدارة (من قائمة الشيت) ───── */
+
+/** يولّد كلمة مرور مؤقتة للموظف في الصف المحدد من Employees ويعرضها مرة واحدة. يغيّرها الموظف عند أول دخول. */
+function issueTempPasswordForSelectedEmployee() {
+  var ui = SpreadsheetApp.getUi();
+  var sh = SpreadsheetApp.getActiveSheet();
+  var row = sh.getActiveRange() ? sh.getActiveRange().getRow() : 0;
+  if (sh.getName() !== SHEET_EMP || row < 2) {
+    ui.alert('افتح ورقة Employees واختر خلية في صف الموظف، ثم أعد المحاولة.');
+    return;
+  }
+  var email = normEmail_(sh.getRange(row, 1).getValue());
+  if (!validEmail_(email)) { ui.alert('اكتب بريدًا صحيحًا في عمود email لهذا الصف أولًا.'); return; }
+  var pw = randomPassword_(10);
+  setEmpPassword_(email, pw, true);
+  CacheService.getScriptCache().remove('efails:' + email);
+  ui.alert('كلمة المرور المؤقتة', email + '\n\n' + pw + '\n\nأرسلها للموظف. تظهر هذه المرة فقط، ويُطلب منه تغييرها عند أول دخول.', ui.ButtonSet.OK);
+}
+
+/** يولّد مفتاحًا سريًا جديدًا للمنصة في الصف المحدد من SsoApps ويعرضه مرة واحدة. المفتاح القديم يتوقف فورًا. */
+function issueSecretForSelectedApp() {
+  var ui = SpreadsheetApp.getUi();
+  var sh = SpreadsheetApp.getActiveSheet();
+  var row = sh.getActiveRange() ? sh.getActiveRange().getRow() : 0;
+  if (sh.getName() !== SHEET_APPS || row < 2) {
+    ui.alert('افتح ورقة SsoApps واختر خلية في صف المنصة، ثم أعد المحاولة.');
+    return;
+  }
+  var appId = String(sh.getRange(row, 1).getValue()).trim();
+  if (!validAppId_(appId)) { ui.alert('اكتب app_id بأحرف إنجليزية صغيرة وأرقام وشرطة (مثل patient-experience).'); return; }
+  var secret = randomToken_(48);
+  PropertiesService.getScriptProperties().setProperty('sso_secret:' + appId, secret);
+  ui.alert('مفتاح المنصة ' + appId, secret +
+    '\n\nضعه في إعدادات المنصة باسم SSO_SECRET (في Render: Environment)، ثم أعد تشغيلها.' +
+    '\nيظهر هذه المرة فقط. إصدار مفتاح جديد يوقف القديم فورًا.', ui.ButtonSet.OK);
+}
+
+/* ───── الطلبات من صفحة البوابة ───── */
+
+function empCall_(body) {
+  try {
+    switch (body.action) {
+      case 'empLogin': return empLogin_(body);
+      case 'empMe': return withEmp_(body, function (emp) { return empOut_(emp); });
+      case 'empLogout':
+        if (body.token) CacheService.getScriptCache().remove('emp:' + String(body.token));
+        return { ok: true };
+      case 'empChangePassword': return withEmp_(body, function (emp) { return empChangePassword_(emp, body); }, true);
+      case 'empTicket': return withEmp_(body, function (emp) { return empTicket_(emp, String(body.app || '')); });
+      default: return { ok: false, error: 'bad_action' };
+    }
+  } catch (err) {
+    return { ok: false, error: 'server' };
+  }
+}
+
+function empLogin_(body) {
+  var email = normEmail_(body.email);
+  var pw = String(body.password || '');
+  if (!validEmail_(email) || !pw) return { ok: false, error: 'bad_login' };
+  var cache = CacheService.getScriptCache();
+  var key = 'efails:' + email;
+  var fails = Number(cache.get(key) || 0);
+  if (fails >= MAX_FAILS) return { ok: false, error: 'locked' };
+  var emp = findEmp_(email);
+  if (!emp || !isYes_(emp.active) || !checkPassword_(pw, String(emp.password_hash || ''))) {
+    cache.put(key, String(fails + 1), LOCK_SECONDS);
+    return { ok: false, error: 'bad_login' };
+  }
+  cache.remove(key);
+  var token = randomToken_(48);
+  cache.put('emp:' + token, email, EMP_SESSION_SECONDS);
+  setEmpCell_(emp._row, 'last_login', new Date().toISOString());
+  var out = empOut_(emp);
+  out.token = token;
+  return out;
+}
+
+/** يتحقق من جلسة الموظف ثم ينفّذ fn. allowMustChange: يسمح بالطلب قبل تغيير كلمة المرور المؤقتة. */
+function withEmp_(body, fn, allowMustChange) {
+  var token = String(body.token || '');
+  var email = token && CacheService.getScriptCache().get('emp:' + token);
+  var emp = email && findEmp_(email);
+  if (!emp || !isYes_(emp.active)) return { ok: false, error: 'emp_session' };
+  if (!allowMustChange && isYes_(emp.must_change)) return { ok: false, error: 'must_change' };
+  return fn(emp);
+}
+
+function empOut_(emp) {
+  var mustChange = isYes_(emp.must_change);
+  return {
+    ok: true,
+    employee: { email: String(emp.email), name: String(emp.name || emp.email), mustChange: mustChange },
+    apps: mustChange ? [] : appsFor_(normEmail_(emp.email)).map(function (a) { return { id: a.id, name: a.name, url: a.url }; })
+  };
+}
+
+function empChangePassword_(emp, body) {
+  var oldPw = String(body.oldPassword || '');
+  var newPw = String(body.newPassword || '');
+  if (!checkPassword_(oldPw, String(emp.password_hash || ''))) return { ok: false, error: 'bad_old_password' };
+  if (newPw.length < 8 || newPw.length > 100) return { ok: false, error: 'weak_password' };
+  if (newPw === oldPw) return { ok: false, error: 'same_password' };
+  setEmpPassword_(normEmail_(emp.email), newPw, false);
+  return empOut_(findEmp_(normEmail_(emp.email)));
+}
+
+/** يصدر تذكرة دخول للمنصة إذا كان الموظف مربوطًا بها، ويعيد الرابط الذي تُفتح عليه. */
+function empTicket_(emp, appId) {
+  var email = normEmail_(emp.email);
+  var app = null;
+  appsFor_(email).forEach(function (a) { if (a.id === appId) app = a; });
+  if (!app) {
+    logSso_(email, appId, '', 'not_linked');
+    return { ok: false, error: 'not_linked' };
+  }
+  var now = Math.floor(Date.now() / 1000);
+  var ticket = signJwt_({
+    iss: SSO_ISSUER, aud: app.id, sub: app.login, email: email,
+    iat: now, exp: now + TICKET_SECONDS, jti: randomToken_(32)
+  }, app.secret);
+  logSso_(email, app.id, app.login, 'issued');
+  return { ok: true, url: app.url.replace(/#.*$/, '') + '#sso=' + ticket };
+}
+
+/* ───── القراءة ───── */
+
+function readRows_(name, cols) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getRange(2, 1, sh.getLastRow() - 1, cols.length).getValues();
+  return values.map(function (row, i) {
+    var o = { _row: i + 2 };
+    cols.forEach(function (c, j) { o[c] = row[j]; });
+    return o;
+  });
+}
+
+function findEmp_(email) {
+  var rows = readRows_(SHEET_EMP, EMP_COLS);
+  for (var i = 0; i < rows.length; i++) {
+    if (normEmail_(rows[i].email) === email) return rows[i];
+  }
+  return null;
+}
+
+/** المنصات المفعّلة التي للموظف حساب مربوط فيها، ولها مفتاح سري. */
+function appsFor_(email) {
+  var props = PropertiesService.getScriptProperties();
+  var apps = {};
+  readRows_(SHEET_APPS, APP_COLS).forEach(function (a) {
+    var id = String(a.app_id).trim();
+    var url = String(a.url || '').trim();
+    var secret = props.getProperty('sso_secret:' + id);
+    if (validAppId_(id) && isYes_(a.active) && /^https:\/\/\S+$/i.test(url) && secret) {
+      apps[id] = { id: id, name: String(a.name || id), url: url, secret: secret };
+    }
+  });
+  var out = [];
+  readRows_(SHEET_LINKS, LINK_COLS).forEach(function (l) {
+    var id = String(l.app_id).trim();
+    var login = String(l.login || '').trim();
+    if (normEmail_(l.email) === email && apps[id] && login) {
+      var a = apps[id];
+      out.push({ id: a.id, name: a.name, url: a.url, secret: a.secret, login: login });
+      delete apps[id];   // ربط واحد لكل منصة (الأول في الجدول)
+    }
+  });
+  return out;
+}
+
+/* ───── الكتابة ───── */
+
+function setEmpCell_(row, col, value) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_EMP);
+  sh.getRange(row, EMP_COLS.indexOf(col) + 1).setValue(value);
+}
+
+function setEmpPassword_(email, pw, mustChange) {
+  var emp = findEmp_(email);
+  if (!emp) throw new Error('no_employee');
+  setEmpCell_(emp._row, 'password_hash', hashPassword_(pw));
+  setEmpCell_(emp._row, 'must_change', mustChange ? 'yes' : 'no');
+  if (!emp.created_at) setEmpCell_(emp._row, 'created_at', new Date().toISOString());
+}
+
+function logSso_(email, appId, login, result) {
+  var sh = ensureSheet_(SpreadsheetApp.getActiveSpreadsheet(), SHEET_SSO_LOG, SSO_LOG_COLS);
+  sh.appendRow([new Date().toISOString(), email, appId, login, result]);
+}
+
+/* ───── التشفير ───── */
+
+/** كلمة المرور تُحفظ مشفّرة: ملح عشوائي + HMAC-SHA256 مكرر، بصيغة v1$rounds$salt$hash */
+function hashPassword_(pw, salt, rounds) {
+  salt = salt || randomToken_(24);
+  rounds = rounds || PW_ROUNDS;
+  var key = Utilities.newBlob(salt).getBytes();
+  var h = Utilities.computeHmacSha256Signature(Utilities.newBlob(pw).getBytes(), key);
+  for (var i = 1; i < rounds; i++) h = Utilities.computeHmacSha256Signature(h, key);
+  return 'v1$' + rounds + '$' + salt + '$' + Utilities.base64Encode(h);
+}
+
+function checkPassword_(pw, stored) {
+  var p = String(stored || '').split('$');
+  if (p.length !== 4 || p[0] !== 'v1' || !(Number(p[1]) > 0)) return false;
+  return safeEqual_(hashPassword_(pw, p[2], Number(p[1])), stored);
+}
+
+function signJwt_(payload, secret) {
+  var input = b64url_(Utilities.newBlob(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).getBytes()) + '.' +
+    b64url_(Utilities.newBlob(JSON.stringify(payload)).getBytes());
+  var sig = Utilities.computeHmacSha256Signature(Utilities.newBlob(input).getBytes(), Utilities.newBlob(secret).getBytes());
+  return input + '.' + b64url_(sig);
+}
+
+function b64url_(bytes) {
+  return Utilities.base64EncodeWebSafe(bytes).replace(/=+$/, '');
+}
+
+/** نص عشوائي من حروف وأرقام (UUID مصدره عشوائي آمن) */
+function randomToken_(len) {
+  var s = '';
+  while (s.length < len) s += Utilities.getUuid().replace(/-/g, '');
+  return s.slice(0, len);
+}
+
+/* بدون الحروف المتشابهة (0/O و 1/l/I) لتُقرأ بسهولة */
+function randomPassword_(len) {
+  var chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var hex = randomToken_(len * 2);
+  var s = '';
+  for (var i = 0; i < len; i++) s += chars.charAt(parseInt(hex.substr(i * 2, 2), 16) % chars.length);
+  return s;
+}
+
+/* ───── أدوات صغيرة ───── */
+
+function normEmail_(v) { return String(v || '').trim().toLowerCase(); }
+function validEmail_(v) { return /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(v); }
+function validAppId_(v) { return /^[a-z0-9][a-z0-9-]{1,39}$/.test(v); }
+function isYes_(v) { return v === true || /^(yes|true|نعم|1)$/i.test(String(v).trim()); }
